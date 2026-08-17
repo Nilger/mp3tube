@@ -34,7 +34,7 @@ type Conversion = {
   date: number;
   status: "completed" | "processing";
   audioUrl: string;
-  thumbnail?: string;
+  thumbnail?: string | undefined;
 };
 
 const STORAGE_KEY = "mp3flow_history";
