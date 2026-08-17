@@ -34,6 +34,7 @@ type Conversion = {
   date: number;
   status: "completed" | "processing";
   audioUrl: string;
+  thumbnail?: string;
 };
 
 const STORAGE_KEY = "mp3flow_history";
@@ -66,11 +67,18 @@ function timeAgo(ts: number) {
   return `há ${Math.floor(h / 24)} d`;
 }
 
+function youtubeId(link: string) {
+  const m = link.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
 function Index() {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState<Conversion[]>([]);
   const [track, setTrack] = useState<Conversion | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [current, setCurrent] = useState<Conversion | null>(null);
 
   useEffect(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
@@ -96,6 +104,7 @@ function Index() {
     setLoading(true);
     const link = url.trim();
     const id = crypto.randomUUID();
+    const vid = youtubeId(link);
     const pending: Conversion = {
       id,
       title: link.replace(/^https?:\/\//, "").slice(0, 60),
@@ -103,22 +112,31 @@ function Index() {
       date: Date.now(),
       status: "processing",
       audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
+      thumbnail: vid ? `https://i.ytimg.com/vi/${vid}/hqdefault.jpg` : undefined,
     };
     const withPending = [pending, ...history];
     persist(withPending);
     setUrl("");
+    setCurrent(pending);
+    setProgress(8);
+    const tick = setInterval(() => setProgress((p) => Math.min(p + 12, 92)), 150);
     setTimeout(() => {
+      clearInterval(tick);
+      setProgress(100);
       const done = withPending.map((c) =>
         c.id === id ? { ...c, status: "completed" as const } : c,
       );
       persist(done);
       setLoading(false);
+      setCurrent({ ...pending, status: "completed" });
+      setTimeout(() => setProgress(0), 600);
     }, 1600);
   };
 
   const remove = (id: string) => {
     persist(history.filter((c) => c.id !== id));
     setTrack((t) => (t?.id === id ? null : t));
+    setCurrent((c) => (c?.id === id ? null : c));
   };
 
   const sorted = [...history].sort((a, b) => b.date - a.date);
@@ -137,7 +155,8 @@ function Index() {
           </h1>
         </div>
         <p className="mb-8 mt-2 border-l-[3px] border-primary pl-4 text-base text-muted-foreground">
-          Converta vídeos do YouTube para MP3 em segundos
+          Converta vídeos do YouTube para MP3 em segundos —{" "}
+          <strong className="font-semibold text-accent">grátis para todos</strong>
         </p>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:rounded-full sm:border sm:border-border sm:bg-surface sm:py-1 sm:pl-6 sm:pr-1 sm:transition-shadow sm:focus-within:border-primary sm:focus-within:shadow-[0_0_0_4px_oklch(0.51_0.22_275_/_0.2)]">
@@ -177,8 +196,34 @@ function Index() {
               </span>
             ))}
           </div>
-          <span>🔒 100% seguro &amp; gratuito</span>
+          <span>🔒 100% gratuito</span>
         </div>
+
+        {current && (
+          <div className="mb-5 flex flex-wrap items-center gap-4 rounded-3xl border border-border bg-surface px-5 py-4">
+            <div
+              className="h-[160px] w-full flex-shrink-0 rounded-xl border border-border bg-secondary bg-cover bg-center sm:h-[68px] sm:w-[120px]"
+              style={
+                current.thumbnail ? { backgroundImage: `url(${current.thumbnail})` } : undefined
+              }
+            />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[15px] font-semibold text-foreground">{current.title}</p>
+              <p className="text-[13px] text-muted-foreground">
+                {current.status === "completed" ? "Pronto para download" : "Processando áudio…"}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {progress > 0 && (
+          <div className="mb-5 h-[3px] w-full overflow-hidden rounded bg-secondary">
+            <div
+              className="h-full rounded bg-[image:var(--gradient-progress)] transition-[width] duration-300"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        )}
 
         {track && (
           <div className="mb-6 flex flex-wrap items-center gap-4 rounded-3xl border border-border bg-surface px-5 py-3.5 sm:rounded-full">
@@ -286,7 +331,8 @@ function Index() {
         </div>
 
         <p className="mt-6 text-center text-xs text-muted-foreground/70">
-          ⚡ Powered by MP3Flow · apenas para uso pessoal
+          ⚡ Feito com ❤️ para democratizar o acesso ao áudio ·{" "}
+          <span className="font-semibold text-primary">MP3Flow</span>
         </p>
       </div>
     </main>
