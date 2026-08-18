@@ -6,7 +6,7 @@ const COOKIE_NAME = "mp3flow_session";
 const THIRTY_DAYS = 60 * 60 * 24 * 30;
 
 function expectedToken(): string {
-  const secret = process.env.SITE_PASSWORD;
+  const secret = process.env['SITE_PASSWORD'];
   if (!secret) {
     throw new Error(
       "SITE_PASSWORD is not set. Define it as an environment variable before starting the app.",
@@ -35,7 +35,7 @@ export const checkAuth = createServerFn({ method: "GET" }).handler(async () => {
 export const login = createServerFn({ method: "POST" })
   .validator((data: unknown) => data as { password: string })
   .handler(async ({ data }) => {
-    const configured = process.env.SITE_PASSWORD;
+    const configured = process.env['SITE_PASSWORD'];
     if (!configured) {
       throw new Error("SITE_PASSWORD is not set on the server.");
     }

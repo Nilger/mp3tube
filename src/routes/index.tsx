@@ -39,8 +39,8 @@ const STORAGE_KEY = "mp3flow_history";
 // Files now live on the backend's persistent disk (see mp3flow-backend), so
 // audioUrl is a real server URL that survives a page refresh — it just expires
 // after the backend's RETENTION_DAYS window.
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL as string | undefined;
-const BACKEND_KEY = import.meta.env.VITE_BACKEND_API_KEY as string | undefined;
+const BACKEND_URL = import.meta.env['VITE_BACKEND_URL'] as string | undefined;
+const BACKEND_KEY = import.meta.env['VITE_BACKEND_API_KEY'] as string | undefined;
 
 function formatDuration(totalSeconds: number) {
   if (!totalSeconds || totalSeconds <= 0) return "--:--";
