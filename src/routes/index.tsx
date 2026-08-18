@@ -1,27 +1,23 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
+import { checkAuth, logout } from "../lib/auth.server";
+
 export const Route = createFileRoute("/")({
+  beforeLoad: async () => {
+    const { authenticated } = await checkAuth();
+    if (!authenticated) {
+      throw redirect({ to: "/login" });
+    }
+  },
   head: () => ({
     meta: [
-      { title: "MP3Flow — Conversor YouTube para MP3 Grátis" },
+      { title: "MP3Flow — Ferramenta pessoal" },
       {
         name: "description",
-        content:
-          "Converta vídeos do YouTube para MP3 grátis, rápido e seguro. Baixe áudio em alta qualidade 320 kbps.",
+        content: "Ferramenta privada de uso pessoal.",
       },
-      {
-        name: "keywords",
-        content:
-          "conversor youtube mp3, baixar audio youtube, youtube to mp3, converter video para mp3",
-      },
-      { property: "og:title", content: "MP3Flow — Conversor YouTube para MP3 Grátis" },
-      {
-        property: "og:description",
-        content: "Converta vídeos do YouTube para MP3 em segundos, em 320 kbps.",
-      },
-      { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
+      { name: "robots", content: "noindex, nofollow" },
     ],
   }),
   component: Index,
@@ -29,6 +25,7 @@ export const Route = createFileRoute("/")({
 
 type Conversion = {
   id: string;
+  remoteId?: string;
   title: string;
   duration: string;
   date: number;
@@ -39,24 +36,21 @@ type Conversion = {
 
 const STORAGE_KEY = "mp3flow_history";
 
-const SAMPLE: Conversion[] = [
-  {
-    id: "1",
-    title: "Imagine - John Lennon (Remastered)",
-    duration: "3:45",
-    date: Date.now() - 3600000,
-    status: "completed",
-    audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
-  },
-  {
-    id: "2",
-    title: "Lo-fi hip hop radio - beats to relax/study",
-    duration: "2:18:22",
-    date: Date.now() - 86400000,
-    status: "completed",
-    audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
-  },
-];
+// Files now live on the backend's persistent disk (see mp3flow-backend), so
+// audioUrl is a real server URL that survives a page refresh — it just expires
+// after the backend's RETENTION_DAYS window.
+const BACKEND_URL = import.meta.env['VITE_BACKEND_URL'] as string | undefined;
+const BACKEND_KEY = import.meta.env['VITE_BACKEND_API_KEY'] as string | undefined;
+
+function formatDuration(totalSeconds: number) {
+  if (!totalSeconds || totalSeconds <= 0) return "--:--";
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = Math.floor(totalSeconds % 60);
+  const mm = h > 0 ? String(m).padStart(2, "0") : String(m);
+  const ss = String(s).padStart(2, "0");
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
 
 function timeAgo(ts: number) {
   const diff = Math.floor((Date.now() - ts) / 60000);
@@ -79,19 +73,18 @@ function Index() {
   const [track, setTrack] = useState<Conversion | null>(null);
   const [progress, setProgress] = useState(0);
   const [current, setCurrent] = useState<Conversion | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       try {
         setHistory(JSON.parse(stored) as Conversion[]);
-        return;
       } catch {
         /* ignore */
       }
     }
-    setHistory(SAMPLE);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(SAMPLE));
   }, []);
 
   const persist = (next: Conversion[]) => {
@@ -99,8 +92,14 @@ function Index() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   };
 
-  const convert = () => {
+  const convert = async () => {
     if (!url.trim() || loading) return;
+    if (!BACKEND_URL || !BACKEND_KEY) {
+      setError("Backend não configurado (VITE_BACKEND_URL / VITE_BACKEND_API_KEY ausentes).");
+      return;
+    }
+
+    setError(null);
     setLoading(true);
     const link = url.trim();
     const id = crypto.randomUUID();
@@ -108,35 +107,87 @@ function Index() {
     const pending: Conversion = {
       id,
       title: link.replace(/^https?:\/\//, "").slice(0, 60),
-      duration: "3:45",
+      duration: "--:--",
       date: Date.now(),
       status: "processing",
-      audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
+      audioUrl: "",
       thumbnail: vid ? `https://i.ytimg.com/vi/${vid}/hqdefault.jpg` : undefined,
     };
     const withPending = [pending, ...history];
     persist(withPending);
     setUrl("");
     setCurrent(pending);
+    // Real progress isn't available from a single fetch response, so this is
+    // an indeterminate "still working" indicator, not a true percentage.
     setProgress(8);
-    const tick = setInterval(() => setProgress((p) => Math.min(p + 12, 92)), 150);
-    setTimeout(() => {
+    const tick = setInterval(() => setProgress((p) => Math.min(p + 4, 90)), 800);
+
+    try {
+      const res = await fetch(`${BACKEND_URL.replace(/\/$/, "")}/convert`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": BACKEND_KEY,
+        },
+        body: JSON.stringify({ url: link }),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(body.error || `Falha na conversão (HTTP ${res.status})`);
+      }
+
+      const payload = (await res.json()) as {
+        id: string;
+        title: string;
+        duration: number;
+        url: string;
+      };
+      const audioUrl = `${BACKEND_URL.replace(/\/$/, "")}${payload.url}`;
+
+      const done: Conversion = {
+        ...pending,
+        remoteId: payload.id,
+        title: payload.title || pending.title,
+        duration: formatDuration(payload.duration),
+        status: "completed",
+        audioUrl,
+      };
+
       clearInterval(tick);
       setProgress(100);
-      const done = withPending.map((c) =>
-        c.id === id ? { ...c, status: "completed" as const } : c,
-      );
-      persist(done);
-      setLoading(false);
-      setCurrent({ ...pending, status: "completed" });
+      persist(withPending.map((c) => (c.id === id ? done : c)));
+      setCurrent(done);
       setTimeout(() => setProgress(0), 600);
-    }, 1600);
+    } catch (err) {
+      clearInterval(tick);
+      setProgress(0);
+      setError(err instanceof Error ? err.message : "Falha na conversão.");
+      persist(withPending.filter((c) => c.id !== id));
+      setCurrent(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const doLogout = async () => {
+    await logout();
+    navigate({ to: "/login" });
   };
 
   const remove = (id: string) => {
+    const item = history.find((c) => c.id === id);
     persist(history.filter((c) => c.id !== id));
     setTrack((t) => (t?.id === id ? null : t));
     setCurrent((c) => (c?.id === id ? null : c));
+    if (item?.remoteId && BACKEND_URL && BACKEND_KEY) {
+      fetch(`${BACKEND_URL.replace(/\/$/, "")}/files/${item.remoteId}`, {
+        method: "DELETE",
+        headers: { "x-api-key": BACKEND_KEY },
+      }).catch(() => {
+        /* best-effort — the backend's retention job will clean it up eventually */
+      });
+    }
   };
 
   const sorted = [...history].sort((a, b) => b.date - a.date);
@@ -144,9 +195,17 @@ function Index() {
   return (
     <main className="flex min-h-screen items-center justify-center p-6">
       <div className="w-full max-w-[820px] rounded-[2rem] border border-border/60 bg-card/75 p-8 shadow-[var(--shadow-panel)] backdrop-blur-xl sm:rounded-[3rem] sm:p-12">
-        <span className="inline-block rounded-full border border-primary/25 bg-primary/15 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-accent">
-          🎧 conversor de áudio
-        </span>
+        <div className="flex items-center justify-between">
+          <span className="inline-block rounded-full border border-primary/25 bg-primary/15 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-accent">
+            🎧 conversor de áudio · uso pessoal
+          </span>
+          <button
+            onClick={doLogout}
+            className="text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Sair
+          </button>
+        </div>
 
         <div className="mt-5 flex items-center gap-3">
           <span className="animate-pulse text-3xl">🎵</span>
@@ -155,8 +214,8 @@ function Index() {
           </h1>
         </div>
         <p className="mb-8 mt-2 border-l-[3px] border-primary pl-4 text-base text-muted-foreground">
-          Converta vídeos do YouTube para MP3 em segundos —{" "}
-          <strong className="font-semibold text-accent">grátis para todos</strong>
+          Converta vídeos do YouTube para MP3 —{" "}
+          <strong className="font-semibold text-accent">só para o seu uso pessoal</strong>
         </p>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:rounded-full sm:border sm:border-border sm:bg-surface sm:py-1 sm:pl-6 sm:pr-1 sm:transition-shadow sm:focus-within:border-primary sm:focus-within:shadow-[0_0_0_4px_oklch(0.51_0.22_275_/_0.2)]">
@@ -185,6 +244,8 @@ function Index() {
           </button>
         </div>
 
+        {error && <p className="mt-3 px-1.5 text-sm text-danger">⚠️ {error}</p>}
+
         <div className="mb-8 mt-6 flex flex-col gap-2 px-1.5 text-[13px] text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap items-center gap-3">
             {["🎛️ 320 kbps", "📁 MP3", "⚡ Rápido"].map((t) => (
@@ -196,7 +257,7 @@ function Index() {
               </span>
             ))}
           </div>
-          <span>🔒 100% gratuito</span>
+          <span>🔒 uso privado</span>
         </div>
 
         {current && (
@@ -248,6 +309,16 @@ function Index() {
           <h2 className="font-semibold text-foreground">📋 Conversões recentes</h2>
           <button
             onClick={() => {
+              if (BACKEND_URL && BACKEND_KEY) {
+                for (const item of history) {
+                  if (item.remoteId) {
+                    fetch(`${BACKEND_URL.replace(/\/$/, "")}/files/${item.remoteId}`, {
+                      method: "DELETE",
+                      headers: { "x-api-key": BACKEND_KEY },
+                    }).catch(() => {});
+                  }
+                }
+              }
               persist([]);
               setTrack(null);
             }}
@@ -256,6 +327,11 @@ function Index() {
             Limpar tudo
           </button>
         </div>
+
+        <p className="mb-3 px-1.5 text-xs text-muted-foreground/70">
+          Os arquivos ficam guardados por um tempo limitado no servidor e depois são apagados
+          automaticamente.
+        </p>
 
         <div className="flex flex-col gap-2.5">
           {sorted.length === 0 ? (
@@ -331,7 +407,7 @@ function Index() {
         </div>
 
         <p className="mt-6 text-center text-xs text-muted-foreground/70">
-          ⚡ Feito com ❤️ para democratizar o acesso ao áudio ·{" "}
+          ⚡ Ferramenta pessoal ·{" "}
           <span className="font-semibold text-primary">MP3Flow</span>
         </p>
       </div>
